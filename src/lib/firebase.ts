@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -27,3 +27,4 @@ async function testConnection() {
 testConnection();
 
 export const signInWithGoogle = () => signInWithPopup(auth, googleProvider);
+export { RecaptchaVerifier, signInWithPhoneNumber };

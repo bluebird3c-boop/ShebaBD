@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user account information and current balance.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoURL": { "type": "string" },
+        "balance": { "type": "number", "description": "Current available balance in Taka" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "email", "balance"]
+    },
+    "Transaction": {
+      "title": "Transaction Record",
+      "description": "Logs every financial activity performed by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { 
+          "type": "string", 
+          "enum": ["send", "recharge", "cashout", "payment", "add_money", "transfer", "remittance", "budget", "bill", "edu_fee", "air_tickets", "rail_tickets", "savings", "debenture", "donate", "sheba_ai"]
+        },
+        "amount": { "type": "number" },
+        "recipient": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "pending", "failed"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "reference": { "type": "string" }
+      },
+      "required": ["userId", "type", "amount", "status", "timestamp"]
+    },
+    "Card": {
+      "title": "Linked Card",
+      "description": "Details of credit/debit cards linked to the wallet.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "cardHolderName": { "type": "string" },
+        "cardNumberLast4": { "type": "string" },
+        "cardType": { "type": "string", "enum": ["visa", "mastercard", "amex"] },
+        "expiryDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "cardHolderName", "cardNumberLast4", "cardType"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Individual user profile documents."
+    },
+    "transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Global transactions collection secured by userId checks."
+    },
+    "users/{userId}/cards/{cardId}": {
+      "schema": "Card",
+      "description": "Subcollection of cards belonging to a specific user."
+    }
+  }
+}

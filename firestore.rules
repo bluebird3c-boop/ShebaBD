@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['userId', 'displayName', 'email', 'balance']) &&
+             data.userId == request.auth.uid &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.balance is number && data.balance >= 0;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['userId', 'type', 'amount', 'status', 'timestamp']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['send', 'recharge', 'cashout', 'payment', 'add_money', 'transfer', 'remittance', 'budget', 'bill', 'edu_fee', 'air_tickets', 'rail_tickets', 'savings', 'debenture', 'donate', 'sheba_ai'] &&
+             data.amount is number && data.amount > 0 &&
+             data.status in ['success', 'pending', 'failed'] &&
+             data.timestamp == request.time;
+    }
+
+    function isValidCard(data) {
+      return data.keys().hasAll(['userId', 'cardHolderName', 'cardNumberLast4', 'cardType']) &&
+             data.userId == request.auth.uid &&
+             data.cardHolderName is string && data.cardHolderName.size() <= 100 &&
+             data.cardNumberLast4 is string && data.cardNumberLast4.size() == 4 &&
+             data.cardType in ['visa', 'mastercard', 'amex'];
+    }
+
+    // --- Match Blocks ---
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Users shouldn't list other users
+      
+      allow create: if isOwner(userId) && isEmailVerified() && isValidUser(incoming()) && incoming().balance == 100.0; // Starting bonus
+      
+      allow update: if isOwner(userId) && (
+        // Action: Update profile info
+        (incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']) && 
+         incoming().updatedAt == request.time) ||
+        // Action: Update balance (usually handled via backend or atomic writes, but for client-side demo we restrict)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'updatedAt']) &&
+         incoming().updatedAt == request.time && incoming().balance >= 0)
+      );
+    }
+
+    // Transactions Collection
+    match /transactions/{transactionId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isValidTransaction(incoming());
+      allow update, delete: if false; // Transactions are immutable
+    }
+
+    // User Cards Subcollection
+    match /users/{userId}/cards/{cardId} {
+      allow read, write: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidCard(incoming());
+    }
+  }
+}

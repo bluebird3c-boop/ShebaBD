@@ -66,6 +66,7 @@ interface WalletUser {
   isVerified?: boolean;
   nidNumber?: string;
   phone?: string;
+  pin?: string;
 }
 
 interface Transaction {
@@ -112,7 +113,6 @@ function handleFirestoreError(error: any) {
 }
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [walletUser, setWalletUser] = useState<WalletUser | null>(null);
   const [showBalance, setShowBalance] = useState(false);
   const [activeTab, setActiveTab] = useState<'home' | 'wallet' | 'explore' | 'profile'>('home');
@@ -126,10 +126,12 @@ export default function App() {
   const [step, setStep] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
   const [isNidVerifying, setIsNidVerifying] = useState(false);
-  const [loginStep, setLoginStep] = useState<'phone' | 'otp'>('phone');
+  const [loginStep, setLoginStep] = useState<'phone' | 'otp' | 'pin'>('phone');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otp, setOtp] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<any>(null);
+  const [pin, setPin] = useState('');
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [tempUser, setTempUser] = useState<WalletUser | null>(null);
 
   // Filter states
   const [filterType, setFilterType] = useState<string>('all');
@@ -146,43 +148,30 @@ export default function App() {
   ];
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      try {
-        setCurrentUser(user);
-        if (user) {
-          const userRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userRef);
-          if (!userDoc.exists()) {
-            const newUser: WalletUser = {
-              userId: user.uid,
-              displayName: user.displayName || 'User',
-              email: user.email || '',
-              photoURL: user.photoURL || undefined,
-              balance: 100.0
-            };
-            await setDoc(userRef, newUser);
-          }
-        } else {
-          setWalletUser(null);
-          setTransactions([]);
-          setCards([]);
-        }
-      } catch (err) {
-        console.error("Auth error:", err);
-      } finally {
-        setLoading(false);
-      }
-    });
-    const timeout = setTimeout(() => setLoading(false), 5000);
-    return () => {
-      unsubscribe();
-      clearTimeout(timeout);
-    };
+    // For demo, we check if user is in localStorage
+    const savedPhone = localStorage.getItem('sheba_phone');
+    if (savedPhone) {
+      setPhoneNumber(savedPhone);
+      // We still want them to login with PIN though, so we don't auto-sign in fully
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
-    return onSnapshot(doc(db, 'users', currentUser.uid), (snapshot) => {
+    if (!phoneNumber || loginStep !== 'phone') return;
+    // Clearing state if they go back
+    setOtp('');
+    setPin('');
+  }, [loginStep]);
+
+  useEffect(() => {
+    if (!walletUser) return;
+    localStorage.setItem('sheba_phone', walletUser.phone || '');
+  }, [walletUser]);
+
+  useEffect(() => {
+    if (!walletUser) return;
+    return onSnapshot(doc(db, 'users', walletUser.userId), (snapshot) => {
       if (snapshot.exists()) {
         const newData = snapshot.data() as WalletUser;
         setWalletUser(prev => {
@@ -194,35 +183,35 @@ export default function App() {
         });
       }
     }, (error) => console.error("Balance Listener Error:", error));
-  }, [currentUser]);
+  }, [walletUser?.userId]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!walletUser) return;
     const q = query(
       collection(db, 'transactions'),
-      where('userId', '==', currentUser.uid),
+      where('userId', '==', walletUser.userId),
       orderBy('timestamp', 'desc')
     );
     return onSnapshot(q, (snapshot) => {
       const txs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
       setTransactions(txs);
     }, handleFirestoreError);
-  }, [currentUser]);
+  }, [walletUser?.userId]);
 
   useEffect(() => {
-    if (!currentUser) return;
-    const q = query(collection(db, 'users', currentUser.uid, 'cards'));
+    if (!walletUser) return;
+    const q = query(collection(db, 'users', walletUser.userId, 'cards'));
     return onSnapshot(q, (snapshot) => {
       const c = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserCard));
       setCards(c);
     }, handleFirestoreError);
-  }, [currentUser]);
+  }, [walletUser?.userId]);
 
   const handleTransaction = async (type: TransactionType, amount: number, recipient: string, note?: string) => {
-    if (!currentUser || !walletUser) return;
+    if (!walletUser) return;
     try {
       await runTransaction(db, async (transaction) => {
-        const userRef = doc(db, 'users', currentUser.uid);
+        const userRef = doc(db, 'users', walletUser.userId);
         const userSnap = await transaction.get(userRef);
         if (!userSnap.exists()) throw new Error("User missing");
         const currentBalance = userSnap.data().balance;
@@ -232,7 +221,7 @@ export default function App() {
         transaction.update(userRef, { balance: newBalance, updatedAt: serverTimestamp() });
         const txRef = doc(collection(db, 'transactions'));
         transaction.set(txRef, { 
-          userId: currentUser.uid, 
+          userId: walletUser.userId, 
           type, 
           amount, 
           recipient, 
@@ -251,10 +240,10 @@ export default function App() {
   };
 
   const handleSaveCard = async (cardData: Omit<UserCard, 'id' | 'userId'>) => {
-    if (!currentUser) return;
-    const cardRef = doc(collection(db, 'users', currentUser.uid, 'cards'));
+    if (!walletUser) return;
+    const cardRef = doc(collection(db, 'users', walletUser.userId, 'cards'));
     await setDoc(cardRef, {
-      userId: currentUser.uid,
+      userId: walletUser.userId,
       ...cardData
     }).catch(handleFirestoreError);
     setIsAddingCard(false);
@@ -268,37 +257,60 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen bg-sky-400 flex items-center justify-center text-white text-2xl font-black">সেবা</div>;
 
-  if (!currentUser) {
-    const setupRecaptcha = () => {
-      if (!(window as any).recaptchaVerifier) {
-        (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          'size': 'invisible',
-        });
-      }
-    };
-
+  if (!walletUser) {
     const handlePhoneSignIn = async () => {
-      if (!phoneNumber.startsWith('+')) {
-        alert("Please use international format (e.g., +88017...)");
+      if (phoneNumber.length < 10) {
+        alert("মোবাইল নম্বর সঠিক নয়");
         return;
       }
-      try {
-        setupRecaptcha();
-        const appVerifier = (window as any).recaptchaVerifier;
-        const result = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
-        setConfirmationResult(result);
-        setLoginStep('otp');
-      } catch (err) {
-        console.error(err);
-        alert("Phone selection failed. Try again.");
-      }
+      // Demo logic: Just move to OTP step
+      setLoginStep('otp');
     };
 
     const handleVerifyOtp = async () => {
-      try {
-        await confirmationResult.confirm(otp);
-      } catch (err) {
-        alert("Invalid OTP");
+      if (otp !== '123456') {
+        alert("ভুল ওটিপি! ডেমো ওটিপি '123456' ব্যবহার করুন।");
+        return;
+      }
+      
+      // Check if user exists in Firestore
+      const userRef = doc(db, 'users', phoneNumber);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        setTempUser(userDoc.data() as WalletUser);
+        setIsNewUser(false);
+      } else {
+        setIsNewUser(true);
+      }
+      setLoginStep('pin');
+    };
+
+    const handlePinAuth = async () => {
+      if (pin.length !== 6) {
+        alert("পিন অবশ্যই ৬ ডিজিটের হতে হবে");
+        return;
+      }
+
+      const userRef = doc(db, 'users', phoneNumber);
+      
+      if (isNewUser) {
+        const newUser: WalletUser = {
+          userId: phoneNumber,
+          displayName: `User ${phoneNumber.slice(-4)}`,
+          email: '',
+          phone: phoneNumber,
+          balance: 100.0,
+          pin: pin
+        };
+        await setDoc(userRef, newUser);
+        setWalletUser(newUser);
+      } else {
+        if (tempUser?.pin === pin) {
+          setWalletUser(tempUser);
+        } else {
+          alert("ভুল পিন কোড!");
+        }
       }
     };
 
@@ -315,8 +327,6 @@ export default function App() {
         </motion.div>
 
         <div className="w-full max-w-sm space-y-4 z-10">
-          <div id="recaptcha-container"></div>
-          
           <AnimatePresence mode="wait">
             {loginStep === 'phone' && (
               <motion.div key="p" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
@@ -325,7 +335,7 @@ export default function App() {
                    <input 
                       value={phoneNumber} 
                       onChange={e => setPhoneNumber(e.target.value)} 
-                      placeholder="+88017..." 
+                      placeholder="017XXXXXXXX" 
                       className="w-full p-5 bg-white/10 border border-white/20 rounded-3xl outline-none font-black text-xl placeholder:text-white/30"
                    />
                 </div>
@@ -335,19 +345,39 @@ export default function App() {
 
             {loginStep === 'otp' && (
               <motion.div key="o" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
-                <div className="space-y-2">
-                   <label className="text-[10px] font-black uppercase tracking-widest ml-2 opacity-60">Enter OTP</label>
+                <div className="space-y-2 text-center">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Enter OTP (Demo: 123456)</label>
                    <input 
                       value={otp} 
                       onChange={e => setOtp(e.target.value)} 
                       placeholder="000000" 
+                      maxLength={6}
                       className="w-full p-5 bg-white/10 border border-white/20 rounded-3xl outline-none font-black text-4xl text-center tracking-[0.5em] placeholder:text-white/30"
                    />
                 </div>
                 <div className="flex flex-col gap-3">
-                   <button onClick={handleVerifyOtp} className="w-full bg-white text-sky-500 p-5 rounded-3xl font-black active:scale-95 shadow-xl transition-transform hover:scale-[1.02]">Verify & Login</button>
+                   <button onClick={handleVerifyOtp} className="w-full bg-white text-sky-500 p-5 rounded-3xl font-black active:scale-95 shadow-xl transition-transform hover:scale-[1.02]">Verify OTP</button>
                    <button onClick={() => setLoginStep('phone')} className="w-full text-white/60 font-black text-[10px] uppercase tracking-widest">Change Number</button>
                 </div>
+              </motion.div>
+            )}
+
+            {loginStep === 'pin' && (
+              <motion.div key="pin" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
+                <div className="space-y-2 text-center">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-60">{isNewUser ? 'Set 6-Digit PIN' : 'Enter 6-Digit PIN'}</label>
+                   <input 
+                      type="password"
+                      value={pin} 
+                      onChange={e => setPin(e.target.value)} 
+                      placeholder="******" 
+                      maxLength={6}
+                      className="w-full p-5 bg-white/10 border border-white/20 rounded-3xl outline-none font-black text-4xl text-center tracking-[0.5em] placeholder:text-white/30"
+                   />
+                </div>
+                <button onClick={handlePinAuth} className="w-full bg-white text-sky-500 p-5 rounded-3xl font-black active:scale-95 shadow-xl transition-transform hover:scale-[1.02]">
+                  {isNewUser ? 'Set PIN & Get Started' : 'Login with PIN'}
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
@@ -491,12 +521,12 @@ export default function App() {
          <div className="max-w-md mx-auto relative z-10 space-y-4">
             <div className="flex items-center justify-between">
                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center">
-                     {currentUser.photoURL ? <img src={currentUser.photoURL} alt="p" className="w-full h-full object-cover" /> : <User className="w-5 h-5" />}
+                  <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-white/20">
+                     {walletUser.photoURL ? <img src={walletUser.photoURL} alt="p" className="w-full h-full object-cover" /> : <User className="w-5 h-5" />}
                   </div>
-                  <div className="text-left leading-none"><h4 className="text-sm font-black truncate max-w-[100px]">{walletUser?.displayName}</h4></div>
+                  <div className="text-left leading-none"><h4 className="text-sm font-black truncate max-w-[100px]">{walletUser.displayName}</h4></div>
                </div>
-               <button onClick={() => signOut(auth)} className="w-9 h-9 flex items-center justify-center"><LogOut className="w-5 h-5" /></button>
+               <button onClick={() => setWalletUser(null)} className="w-9 h-9 flex items-center justify-center"><LogOut className="w-5 h-5" /></button>
             </div>
             <div className="text-center py-2">
                <motion.button onClick={() => setShowBalance(!showBalance)} className="flex flex-col items-center gap-2 w-full">
@@ -721,10 +751,10 @@ export default function App() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} key="p" className="space-y-8">
               <div className="bg-sky-50 p-8 rounded-[2.5rem] text-center space-y-4">
                 <div className="relative inline-block">
-                  <img src={currentUser.photoURL || `https://ui-avatars.com/api/?name=${walletUser?.displayName}&background=38bdf8&color=fff`} className="w-24 h-24 rounded-full mx-auto" alt="p" />
-                  {walletUser?.isVerified && <div className="absolute bottom-0 right-0 bg-emerald-500 text-white p-1 rounded-full border-4 border-white"><ShieldCheck className="w-4 h-4" /></div>}
+                  <img src={walletUser.photoURL || `https://ui-avatars.com/api/?name=${walletUser.displayName}&background=38bdf8&color=fff`} className="w-24 h-24 rounded-full mx-auto" alt="p" />
+                  {walletUser.isVerified && <div className="absolute bottom-0 right-0 bg-emerald-500 text-white p-1 rounded-full border-4 border-white"><ShieldCheck className="w-4 h-4" /></div>}
                 </div>
-                <h2 className="text-2xl font-black">{walletUser?.displayName}</h2>
+                <h2 className="text-2xl font-black">{walletUser.displayName}</h2>
                 <div className="space-y-2">
                     <button onClick={() => setIsNidVerifying(true)} className="w-full flex items-center justify-between p-4 bg-white rounded-2xl group transition-all hover:bg-sky-400">
                         <div className="flex items-center gap-3">
@@ -732,8 +762,8 @@ export default function App() {
                            <span className="font-bold text-sm group-hover:text-white">NID Verification</span>
                         </div>
                         <div className="flex items-center gap-2">
-                           <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${walletUser?.isVerified ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
-                             {walletUser?.isVerified ? 'Verified' : 'Unverified'}
+                           <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${walletUser.isVerified ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                             {walletUser.isVerified ? 'Verified' : 'Unverified'}
                            </span>
                            <ChevronRight className="w-4 h-4 group-hover:text-white" />
                         </div>
@@ -746,7 +776,7 @@ export default function App() {
                         <span className="font-bold text-sm">Support</span>
                         <ChevronRight className="w-4 h-4" />
                     </button>
-                    <button onClick={() => signOut(auth)} className="w-full flex items-center justify-between p-4 bg-white rounded-2xl text-red-500">
+                    <button onClick={() => setWalletUser(null)} className="w-full flex items-center justify-between p-4 bg-white rounded-2xl text-red-500">
                         <span className="font-black text-sm uppercase">Sign Out</span>
                         <LogOut className="w-4 h-4" />
                     </button>
@@ -802,8 +832,8 @@ export default function App() {
             user={walletUser} 
             onClose={() => setIsNidVerifying(false)} 
             onVerify={async (nid) => {
-              if (!currentUser) return;
-              await setDoc(doc(db, 'users', currentUser.uid), {
+              if (!walletUser) return;
+              await setDoc(doc(db, 'users', walletUser.userId), {
                 isVerified: true,
                 nidNumber: nid
               }, { merge: true });

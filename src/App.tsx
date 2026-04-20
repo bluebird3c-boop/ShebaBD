@@ -267,23 +267,32 @@ export default function App() {
       setLoginStep('otp');
     };
 
-    const handleVerifyOtp = async () => {
-      if (otp !== '123456') {
-        alert("ভুল ওটিপি! ডেমো ওটিপি '123456' ব্যবহার করুন।");
+    const handleVerifyOtp = async (inputOtp?: string) => {
+      const otpToVerify = inputOtp || otp;
+      if (otpToVerify !== '123456') {
+        if (otpToVerify.length === 6) alert("ভুল ওটিপি! ডেমো ওটিপি '123456' ব্যবহার করুন।");
         return;
       }
       
-      // Check if user exists in Firestore
-      const userRef = doc(db, 'users', phoneNumber);
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        setTempUser(userDoc.data() as WalletUser);
-        setIsNewUser(false);
-      } else {
-        setIsNewUser(true);
+      try {
+        // Check if user exists in Firestore
+        const userRef = doc(db, 'users', phoneNumber);
+        const userDoc = await getDoc(userRef);
+        
+        if (userDoc.exists()) {
+          const data = userDoc.data() as WalletUser;
+          setTempUser(data);
+          setIsNewUser(false);
+        } else {
+          setTempUser(null);
+          setIsNewUser(true);
+        }
+        
+        setLoginStep('pin');
+      } catch (err) {
+        console.error("OTP Verification Error:", err);
+        alert("ভেরিফিকেশন ব্যর্থ হয়েছে। আবার চেষ্টা করুন।");
       }
-      setLoginStep('pin');
     };
 
     const handlePinAuth = async () => {
@@ -329,7 +338,7 @@ export default function App() {
         <div className="w-full max-w-sm space-y-4 z-10">
           <AnimatePresence mode="wait">
             {loginStep === 'phone' && (
-              <motion.div key="p" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
+              <motion.div key="login-phone" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
                 <div className="space-y-2">
                    <label className="text-[10px] font-black uppercase tracking-widest ml-2 opacity-60">Mobile Number</label>
                    <input 
@@ -344,32 +353,39 @@ export default function App() {
             )}
 
             {loginStep === 'otp' && (
-              <motion.div key="o" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
+              <motion.div key="login-otp" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
                 <div className="space-y-2 text-center">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-60">Enter OTP (Demo: 123456)</label>
                    <input 
                       value={otp} 
-                      onChange={e => setOtp(e.target.value)} 
+                      onChange={e => {
+                        const val = e.target.value.replace(/[^0-9]/g, '');
+                        setOtp(val);
+                        if (val.length === 6) handleVerifyOtp(val);
+                      }} 
                       placeholder="000000" 
                       maxLength={6}
                       className="w-full p-5 bg-white/10 border border-white/20 rounded-3xl outline-none font-black text-4xl text-center tracking-[0.5em] placeholder:text-white/30"
                    />
                 </div>
                 <div className="flex flex-col gap-3">
-                   <button onClick={handleVerifyOtp} className="w-full bg-white text-sky-500 p-5 rounded-3xl font-black active:scale-95 shadow-xl transition-transform hover:scale-[1.02]">Verify OTP</button>
+                   <button onClick={() => handleVerifyOtp()} className="w-full bg-white text-sky-500 p-5 rounded-3xl font-black active:scale-95 shadow-xl transition-transform hover:scale-[1.02]">Verify OTP</button>
                    <button onClick={() => setLoginStep('phone')} className="w-full text-white/60 font-black text-[10px] uppercase tracking-widest">Change Number</button>
                 </div>
               </motion.div>
             )}
 
             {loginStep === 'pin' && (
-              <motion.div key="pin" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
+              <motion.div key="login-pin" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-4">
                 <div className="space-y-2 text-center">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-60">{isNewUser ? 'Set 6-Digit PIN' : 'Enter 6-Digit PIN'}</label>
                    <input 
                       type="password"
                       value={pin} 
-                      onChange={e => setPin(e.target.value)} 
+                      onChange={e => {
+                        const val = e.target.value.replace(/[^0-9]/g, '');
+                        setPin(val);
+                      }} 
                       placeholder="******" 
                       maxLength={6}
                       className="w-full p-5 bg-white/10 border border-white/20 rounded-3xl outline-none font-black text-4xl text-center tracking-[0.5em] placeholder:text-white/30"
